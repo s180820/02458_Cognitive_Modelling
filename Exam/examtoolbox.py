@@ -2,6 +2,9 @@ from scipy.optimize import minimize
 import numpy as np
 from scipy.stats import norm
 import matplotlib.pyplot as plt
+import seaborn as sns
+from scipy.interpolate import make_interp_spline, BSpline
+from scipy.optimize import curve_fit
 
 class Variance_Model:
     "lalallalaall"
@@ -52,9 +55,6 @@ class Variance_Model:
         print("The d prime for the biased towards no criterion:", np.mean(d_prime_b_no))
         
 
-    
-
-
 
 class PsychoMetric:
     def __init__(self, stimulus_intensity: np.array, number_of_correct_responses: np.array, number_of_trial: int, p_guess=None) -> None:
@@ -92,3 +92,62 @@ class PsychoMetric:
         print("c = ", res.x[0])
         print("sigma = ", res.x[1])
         print("Negative log likelihood = ", res.fun)
+
+    def return_parameters(self, initial_guess, model):
+        res = minimize(self.NLL_psycho, initial_guess, model, method='L-BFGS-B')
+        return res.x[0], res.x[1]
+
+    def plot_psycho(self, initial_guess):
+        c_ht, sigma_ht = self.return_parameters(initial_guess, "HT")
+        c_psy, sigma_psy = self.return_parameters(initial_guess, "psycho")
+
+        P_s_psy = []
+        P_s_th = []
+        for i in range(len(self.si)):
+            P_spsy = norm.cdf((self.si[i]-c_psy)/sigma_psy)
+            x = norm.cdf((self.si[i]-c_ht)/sigma_ht)
+            P_sht = x + (1 - x)*self.p_guess
+            P_s_psy.append(P_spsy)
+            P_s_th.append(P_sht)
+        
+
+        # 300 represents number of points to make between T.min and T.max
+        xnew = np.linspace(self.si.min(), self.si.max(), 300) 
+
+        spl_psy = make_interp_spline(self.si, P_s_psy, k=3)
+        spl_th = make_interp_spline(self.si, P_s_th, k=3)  # type: BSpline
+        power_smooth_psy = spl_psy(xnew)
+        power_smooth_th = spl_th(xnew)
+        plt.figure(figsize=(15, 5))
+        sns.lineplot(x=xnew, y=power_smooth_psy, label="Psycho")
+        sns.lineplot(x=xnew, y=power_smooth_th, label="HT")
+        sns.scatterplot(x=self.si, y=self.nc/self.nr, color="black", label="Observed Data")
+        plt.show()
+
+class MagnitudeEsimation:
+    def __init__(self, number_of_stimuli: int, a: float) -> None:
+        self.i_s = np.arange(1, number_of_stimuli +1) 
+        self.a = a
+
+    def stevens(self):
+        return 10*self.i_s**(self.a)
+
+    def fechner(self, i_s, c, I0):
+        return (1/c)*np.log(i_s/I0)
+    
+    def print_fit(self):
+        i_p = self.stevens()
+        param, cov = curve_fit(self.fechner, self.i_s, i_p, maxfev=5000)
+        fit_fech = self.fechner(self.i_s, param[0], param[1])
+
+        print("Optimal Weber fraction", param[0])
+        print("I0:", param[1])
+
+        # plot the results
+        plt.plot(self.i_s, i_p, 'o-',label='Steven\'s Law')
+        plt.plot(self.i_s, fit_fech, 'o-', label='Fitted Fechner\'s Law (with a={})'.format(self.a))
+        plt.xlabel('Physical Intensity')
+        plt.ylabel('Perceived Intensity')
+        #plt.title('Fitted Fechner\'s Law (with a=0.33)')
+        plt.legend()
+        plt.show()
