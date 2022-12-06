@@ -1,11 +1,19 @@
-from scipy.optimize import minimize
+import os
+import cv2
 import numpy as np
-from scipy.stats import norm
-import matplotlib.pyplot as plt
 import seaborn as sns
+import matplotlib.pyplot as plt
+
+from scipy import stats
+from scipy.stats import norm
+from scipy.optimize import minimize, curve_fit
 from scipy.interpolate import make_interp_spline, BSpline
-from scipy.optimize import curve_fit
+
 from sklearn.linear_model import LinearRegression
+from sklearn.decomposition import PCA
+
+from mlxtend.feature_selection import SequentialFeatureSelector as sfs
+from mlxtend.plotting import plot_sequential_feature_selection as plot_sfs
 
 class Variance_Model:
     """
@@ -236,6 +244,8 @@ class PsychoMetric:
         sns.lineplot(x=xnew, y=power_smooth_psy, label="Psycho")
         sns.lineplot(x=xnew, y=power_smooth_th, label="HT")
         sns.scatterplot(x=self.si, y=self.nc/self.nr, color="black", label="Observed Data")
+        plt.xlabel("Stimulus Intensity")
+        plt.ylabel("Probability of Correct Response")
         plt.show()
 
 class MagnitudeEsimation:
@@ -276,3 +286,256 @@ class MagnitudeEsimation:
         plt.ylabel('Perceived Intensity')
         plt.legend()
         plt.show()
+
+class PCA_Images:
+    def __init__(self, path) -> None:
+        self.path = path
+
+    def load_images(self):
+        images = []
+        for filename in os.listdir(self.path):
+            img = cv2.imread(self.path + filename)
+            if img is not None:
+                print(self.path + filename)
+                images.append(self.img_to_grayscale(np.array(img)))
+        return images
+    
+    def img_to_grayscale(self, im):
+        x, y, channels = list(im.shape)
+        arr = np.empty((x, y, 1))
+        for i, e in enumerate(np.array(im)):
+            for j, l in enumerate(e):
+                arr[i][j] = l[0]
+        return arr
+
+    def plot_images(self, images):
+        for i in range(len(images)):
+            plt.figure(figsize=(5, 5))
+            plt.imshow(images[i], cmap="gray")
+            plt.show()
+
+    def get_mean_image(self, image_data, show=False):
+        mean_image = np.mean(image_data, axis=(0))
+        mean_image = mean_image.astype(int)
+        if show==True:
+            plt.figure(figsize=(5, 5))
+            plt.imshow(mean_image, cmap="gray")
+            plt.show()
+        return mean_image
+    
+    def pca(self, image_data, n_components):
+        self.n_components = n_components
+        mean_image = self.get_mean_image(image_data)
+        image_data = np.subtract(image_data, mean_image)
+        for_pca = np.reshape(image_data, (image_data.shape[0], -1))
+        print(for_pca.shape)
+        pca = PCA(n_components)
+        pc_scores = pca.fit_transform(for_pca)
+        return pca, pc_scores
+
+    def explained_variance(self, pca):
+        plt.plot(np.cumsum(pca.explained_variance_ratio_))
+        plt.xlabel('Number of Principal components',fontsize=14) 
+        plt.ylabel('Variance explained',fontsize=14) 
+        plt.xticks(fontsize=14); plt.yticks(fontsize = 14)
+        plt.xlim(0,len(pca.explained_variance_ratio_)) 
+        plt.ylim(0,1) 
+        plt.grid()
+
+        print("The first " + str(len(pca.explained_variance_ratio_)) + " components return " + str(np.sum(pca.explained_variance_ratio_)) + " of variance")
+
+    def plot_pc(self, pca, pc_scores, mean_image):
+        maximage=[]
+        minimage=[]
+
+        pcmax = pc_scores.max(0)
+        pcmin = pc_scores.min(0)
+
+        for i,col in enumerate(pc_scores.T):
+            maximage.append(np.dot(pcmax[i],pca.components_[i]))
+            minimage.append(np.dot(pcmin[i],pca.components_[i]))
+            
+        maximage_reshaped = np.reshape(maximage,(self.n_components,200,200,1))
+        minimage_reshaped = np.reshape(minimage,(self.n_components,200,200,1))
+
+        pca_visual = mean_image + maximage_reshaped - minimage_reshaped
+
+        fig = plt.figure(figsize=(10, 5))
+        for i,img in enumerate(pca_visual):
+            plt.subplot(2,int(self.n_components/2),i + 1)
+            axs = plt.imshow(pca_visual[i], cmap="gray")
+            plt.title('PC'+str(i+1),fontsize = 5)
+            axs.axes.get_xaxis().set_visible(False)
+            axs.axes.get_yaxis().set_visible(False)
+
+    
+    def forward_selection(self, pc_scores, ratings, n_features, scoring):
+        X = pc_scores
+        y = ratings
+        # Build RF classifier to use in feature selection
+        #clf = RandomForestClassifier(n_estimators=100, n_jobs=-1)
+        clf = LinearRegression()
+
+        # Build step forward feature selection
+        sfs1 = sfs(clf,
+                k_features=n_features,
+                forward=True,
+                floating=False,
+                verbose=2,
+                scoring=scoring,
+                cv=10)
+
+        sfs1 = sfs1.fit(X, y)
+        # Which features?
+        self.feat_cols = list(sfs1.k_feature_idx_)
+
+        fig1 = plot_sfs(sfs1.get_metric_dict(), kind='std_err')
+        plt.title('Sequential Forward Selection (w. StdERR)')
+        plt.grid()
+        plt.show()
+
+    def linear_model(self, pca, pc_scores, ratings, mean_image):
+        filtered_pc = []
+        for i in range(len(pc_scores)):
+            row = [pc_scores[i][j] for j in self.feat_cols]
+            row = np.reshape(row, (len(self.feat_cols), )).T
+            filtered_pc.append(row)
+
+        filtered_components = []
+        for i in range(len(self.feat_cols)):
+            row = pca.components_[i]
+            filtered_components.append(row)
+
+        reg = LinearRegression()
+        reg.fit(filtered_pc, ratings)
+
+        synthetic_range = np.linspace(-0.2, 1.2, 5)
+        alphas = []
+
+        for i in synthetic_range:
+            alphas.append((i - reg.intercept_) / (np.sum(np.abs(reg.coef_)**2)))
+
+        zs = [alpha * reg.coef_ for alpha in alphas]
+        new_imgs = [np.dot(z, filtered_components) for z in zs]
+
+        plt.figure(figsize=(50, 30))
+        for i,img in enumerate(new_imgs):
+            plt.subplot(1,5,i + 1)
+            fig = plt.imshow(np.reshape(img, (200, 200, 1)) + mean_image, cmap='gray')
+            fig.axes.get_xaxis().set_visible(False)
+            fig.axes.get_yaxis().set_visible(False)
+
+class BCI:
+    def __init__(self, n_responses, data):
+        self.n_responses = n_responses
+        self.data = data
+        self.x_a = data.iloc[0,:]
+        self.x_v = data.iloc[1,:]
+        self.x_av = data.iloc[2:,:]
+        
+    def sig(self, x):
+        return 1/(1 + np.exp(-x))
+
+    def combined_distributions(self, means_atilde, means_vtilde, sigma_a_ini, sigma_v_ini):
+        w_a = sigma_v_ini**2 / (sigma_v_ini**2 + sigma_a_ini**2)
+        # 5 by 5 matrix of 0 
+        means_av_matrix= np.zeros((5,5))
+        for i in range(5):
+            for j in range(5):
+                mean_av = w_a * means_atilde[j] + (1 - w_a) * means_vtilde[i]
+                means_av_matrix[i,j] = mean_av
+        sigma_av = np.sqrt((sigma_a_ini**2 * sigma_v_ini**2) / (sigma_a_ini**2 + sigma_v_ini**2))
+        return [means_av_matrix, sigma_av] 
+
+    def NLL(self, params, model):
+        if model == 'Early':
+            c_a, c_v, sigma_a, sigma_v, c = params
+            means = np.array([1, 2, 3, 4, 5])
+            c = self.sig(c)
+            means_atilde = means - c_a
+            means_vtilde = means - c_v
+
+            estimates = self.combined_distributions(means_atilde, means_vtilde, sigma_a, sigma_v)
+            audiovisual_means = estimates[0]
+            sigma_av = estimates[1]
+
+            Pa = stats.norm.cdf((means - c_a)/sigma_a)
+            Pv = stats.norm.cdf((means - c_v)/sigma_v)
+            Pav = stats.norm.cdf((audiovisual_means)/sigma_av)
+            P_av_BCI = c*Pav + (1-c)*np.array(Pa)
+        
+        elif model == 'Strong Fusion':
+            P_a1, P_a2, P_a3, P_a4, P_a5, P_v1, P_v2, P_v3, P_v4, P_v5, c = params
+            P_a1, P_a2, P_a3, P_a4, P_a5 = self.sig(P_a1), self.sig(P_a2), self.sig(P_a3), self.sig(P_a4), self.sig(P_a5)
+            P_v1, P_v2, P_v3, P_v4, P_v5 = self.sig(P_v1), self.sig(P_v2), self.sig(P_v3), self.sig(P_v4), self.sig(P_v5)
+            c = self.sig(c)
+            Pa  = [P_a1, P_a2, P_a3, P_a4, P_a5]
+            Pv  = [P_v1, P_v2, P_v3, P_v4, P_v5]
+            Pav = np.zeros((5,5)) # 5x5 matrix
+            for i in range(5): # visual
+                for j in range(5): # audio
+                    Pav[i,j] = (Pa[j]*Pv[i])/(Pa[j]*Pv[i] + (1-Pa[j])*(1-Pv[i]))
+            P_av_BCI = c*Pav + (1-c)*np.array(Pa)
+
+        elif model == 'Late':
+            c_a, c_v, sigma_a, sigma_v = params
+            means = np.array([1, 2, 3, 4, 5])
+            
+            means_atilde = means - c_a
+            means_vtilde = means - c_v
+
+            estimates = self.combined_distributions(means_atilde, means_vtilde, sigma_a, sigma_v)
+            audiovisual_means = estimates[0]
+            sigma_av = estimates[1]
+
+            Pa = stats.norm.cdf((means - c_a)/sigma_a)
+            Pv = stats.norm.cdf((means - c_v)/sigma_v)
+            Pav = np.zeros((5,5)) # 5x5 matrix
+            for i in range(5): # visual
+                for j in range(5): # audio
+                    Pav[i,j] = (Pa[j]*Pv[i])/(Pa[j]*Pv[i] + (1-Pa[j])*(1-Pv[i]))  
+            P_av_BCI = Pav
+
+        L = []
+        for i in range(5):
+            for j in range(5):
+                L.append(np.log(stats.binom.pmf(self.x_av.iloc[i,j], self.n_responses, P_av_BCI[i,j])))
+
+        nll = -sum(np.log(stats.binom.pmf(self.x_a, self.n_responses, Pa))) - sum(np.log(stats.binom.pmf(self.x_v, self.n_responses, Pv))) - sum(L)
+        return nll
+
+    def print_parameters(self, model):
+        if model == 'Early':
+            Initial_guess = [0.5, 0.5, np.std(self.x_a), np.std(self.x_v), 0.5]
+            result = minimize(self.NLL, Initial_guess, model)
+            print('Printing parameters for Early Fusion Model')
+            print('c_a: ', result.x[0])
+            print('c_v: ', result.x[1])
+            print('sigma_a: ', result.x[2])
+            print('sigma_v: ', result.x[3])
+            print('c: ', self.sig(result.x[4]))
+        elif model == 'Strong Fusion':
+            Initial_guess = [0.3] * 10 + [0]
+            result = minimize(self.NLL, Initial_guess, model)
+            print('Printing parameters for Strong Fusion Model')
+            print("P_a1:", self.sig(result.x[0]))
+            print("P_a2:", self.sig(result.x[1]))
+            print("P_a3:", self.sig(result.x[2]))
+            print("P_a4:", self.sig(result.x[3]))
+            print("P_a5:", self.sig(result.x[4]))
+            print("P_v1:", self.sig(result.x[5]))
+            print("P_v2:", self.sig(result.x[6]))
+            print("P_v3:", self.sig(result.x[7]))
+            print("P_v4:", self.sig(result.x[8]))
+            print("P_v5:", self.sig(result.x[9]))
+            print("c:", self.sig(result.x[10]))
+        elif model == 'Late':
+            Initial_guess = [0.5, 0.5, np.std(self.x_a), np.std(self.x_v)]
+            result = minimize(self.NLL, Initial_guess, model)
+            print('Printing parameters for Late Fusion Model')
+            print('c_a: ', result.x[0])
+            print('c_v: ', result.x[1])
+            print('sigma_a: ', result.x[2])
+            print('sigma_v: ', result.x[3])
+
+        print("Negative Loglikelihood Value:", result.fun)
