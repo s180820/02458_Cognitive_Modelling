@@ -1,9 +1,11 @@
 import os
 import cv2
+import math
 import numpy as np
 import seaborn as sns
 import matplotlib.pyplot as plt
 
+import scipy
 from scipy import stats
 from scipy.stats import norm
 from scipy.optimize import minimize, curve_fit
@@ -425,6 +427,42 @@ class PCA_Images:
             fig.axes.get_xaxis().set_visible(False)
             fig.axes.get_yaxis().set_visible(False)
 
+class MLE:
+    def __init__(self, n_responses, data):
+        self.n_responses = n_responses
+        self.data = data
+        self.x_a = data.iloc[0,:]
+        self.x_v = data.iloc[1,:]
+        self.x_av = data.iloc[2:,:]
+
+    def cdf_a_v(self, mu, sigma, c):
+        return norm.cdf(mu, c, sigma)
+
+    def cdf_av(self, mu_a, mu_v, sigma_a, sigma_v, c_a, c_v):
+        mu_av = (sigma_v ** 2 / (sigma_a ** 2 + sigma_v ** 2)) * (mu_a - c_a) + (sigma_a ** 2 / (sigma_a ** 2 + sigma_v ** 2)) * (mu_v - c_v)
+        sigma_av = math.sqrt((sigma_a ** 2 * sigma_v ** 2) / (sigma_a ** 2 + sigma_v ** 2))
+        return norm.cdf(mu_av/sigma_av)
+
+    def gauss_likelihood_a_v(self, mu, sigma, c, x):
+        return scipy.special.binom(self.n_responses, x) * self.cdf_a_v(mu, sigma, c)**x * (1 - self.cdf_a_v(mu, sigma, c))**(self.n_responses - x)
+
+    def gauss_likelihood_av(self, mu_a, mu_v, sigma_a, sigma_v, c_a, c_v, x):
+        return scipy.special.binom(self.n_responses, x) * self.cdf_av(mu_a, mu_v, sigma_a, sigma_v, c_a, c_v) ** x * (1 - self.cdf_av(mu_a, mu_v, sigma_a, sigma_v, c_a, c_v)) ** (self.n_responses - x)
+
+    def log_likelihood_gaussian(self, params, d):
+        c_a, c_v, sigma_a, sigma_v = params
+        sigma_a = np.exp(sigma_a)
+        sigma_v = np.exp(sigma_v)
+        l_av = []
+        l_a = np.prod([self.gauss_likelihood_a_v(j + 1, sigma_a, c_a, d[0][j]) for j in range(0, 5)])
+        l_v = np.prod([self.gauss_likelihood_a_v(j + 1, sigma_v, c_v, d[1][j]) for j in range(0, 5)])
+        
+        for i in range(0, 5):
+            for j in range(0, 5):
+                l_av.append(self.gauss_likelihood_av(j + 1, i + 1, sigma_a, sigma_v, c_a, c_v, d[i+2][j]))
+                
+        return -np.log(np.prod([l_a, l_v, np.prod(l_av)]))
+
 class BCI:
     def __init__(self, n_responses, data):
         self.n_responses = n_responses
@@ -539,3 +577,61 @@ class BCI:
             print('sigma_v: ', result.x[3])
 
         print("Negative Loglikelihood Value:", result.fun)
+
+class ROC:
+    def __init__(self, TP, FP, TN, FN):
+        self.TP = TP
+        self.FP = FP
+        self.TN = TN
+        self.FN = FN
+        self.TPR = self.TP/(self.TP + self.FN)
+        self.FPR = self.FP/(self.FP + self.TN)
+
+    def d_prime(self, n_trials):
+        print("d_prime for this model is: ", norm.ppf(self.TP/n_trials)-norm.ppf(self.FP/n_trials))
+
+    def roc_curve(self, n_trials, n_datapoints):
+        fpr = []
+        tpr = []
+        thresholds = np.linspace(0, n_trials, n_datapoints)
+        for threshold in thresholds:
+
+            #Stimuli
+            yes_s = sum([1 if i >= threshold else 0 for i in self.TP]) #tp 
+            no_s = sum([1 if i < threshold else 0 for i in self.FN]) #fn
+
+            #No stimul
+            yes_s0 = sum([1 if i >= threshold else 0 for i in self.FP]) #fp
+            no_s0 = sum([1 if i < threshold else 0 for i in self.TN]) #tn
+
+            tp = yes_s
+            fn = no_s
+            tn = no_s0
+            fp = yes_s0
+        
+            fpr.append(fp / (fp + tn))
+            tpr.append(tp / (tp + fn))
+
+        plt.plot(fpr, tpr)
+        plt.scatter(fpr, tpr)
+        plt.xlabel('False Positive Rate')
+        plt.ylabel('True Positive Rate')
+        plt.title('ROC Curve')
+        plt.show()
+
+    def plot_ROC(self, inverse=False):
+        TPR = self.TPR
+        FPR = self.FPR
+        if inverse == True:
+            TPR = norm.ppf(self.TPR)
+            FPR = norm.ppf(self.FPR)
+        plt.plot(FPR, TPR)
+        plt.scatter(FPR, TPR)
+        plt.xlabel('False Positive Rate')
+        plt.ylabel('True Positive Rate')
+        plt.title('ROC Curve')
+        plt.show()
+
+    def print_parameters(self):
+        print('True Positive Rate:', self.TPR)
+        print('False Positive Rate:', self.FPR)
