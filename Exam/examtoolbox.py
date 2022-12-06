@@ -435,6 +435,9 @@ class MLE:
         self.x_v = data.iloc[1,:]
         self.x_av = data.iloc[2:,:]
 
+    def sig(self, x):
+        return 1/(1 + np.exp(-x))
+
     def cdf_a_v(self, mu, sigma, c):
         return norm.cdf(mu, c, sigma)
 
@@ -462,6 +465,108 @@ class MLE:
                 l_av.append(self.gauss_likelihood_av(j + 1, i + 1, sigma_a, sigma_v, c_a, c_v, d[i+2][j]))
                 
         return -np.log(np.prod([l_a, l_v, np.prod(l_av)]))
+
+    def softmax(self, theta):
+        return (np.exp(theta) / (np.exp(theta) + 1))
+
+    def binom_likelihood_a_v(self, theta, x):
+        return scipy.special.binom(self.n_responses, x) * self.softmax(theta)**x * (1 - self.softmax(theta))**(self.n_responses - x)
+
+    def binom_likelihood_av(self, thetas, x):
+        return scipy.special.binom(self.n_responses, x) * self.p_av(thetas) ** x * (1 - self.p_av(thetas)) ** (self.n_responses - x) 
+
+    def p_av(self, thetas):
+        return (self.softmax(thetas[0]) * self.softmax(thetas[1])) / (self.softmax(thetas[0]) * self.softmax(thetas[1]) + 
+            (1 - self.softmax(thetas[0])) * (1 - self.softmax(thetas[1])))
+
+    def NLL(self, params, model):
+        if model == 'Early':
+            c_a, c_v, sigma_a, sigma_v = params
+            sigma_a = np.exp(sigma_a)
+            sigma_v = np.exp(sigma_v)
+            l_av = []
+            l_a = np.prod([self.gauss_likelihood_a_v(j + 1, sigma_a, c_a, np.array(self.data)[0][j]) for j in range(0, 5)])
+            l_v = np.prod([self.gauss_likelihood_a_v(j + 1, sigma_v, c_v, np.array(self.data)[1][j]) for j in range(0, 5)])
+            
+            for i in range(0, 5):
+                for j in range(0, 5):
+                    l_av.append(self.gauss_likelihood_av(j + 1, i + 1, sigma_a, sigma_v, c_a, c_v, np.array(self.data)[i+2][j]))
+                    
+            return -np.log(np.prod([l_a, l_v, np.prod(l_av)]))
+    
+        elif model == 'Fuzzy':
+            l_av = []
+            l_a = np.prod([self.binom_likelihood_a_v(params[j], np.array(self.data)[0][j]) for j in range(0, 5)])
+            l_v = np.prod([self.binom_likelihood_a_v(params[j+5], np.array(self.data[1][j])) for j in range(0, 5)])
+
+            for i in range(0, 5):
+                for j in range(0, 5):
+                    l_av.append(self.binom_likelihood_av((params[i + 5], params[j]), np.array(self.data)[i+2][j]))
+                    
+            return -np.log(np.prod([l_a, l_v, np.prod(l_av)]))
+        
+        elif model == 'Late':
+            c_a, c_v, sigma_a, sigma_v = params
+            # Define mu
+            mu_a = [1,2,3,4,5] # These are arbitrary 
+            mu_v = [1,2,3,4,5] # These are arbitrary 
+
+            # Define P i.e. the probability of a 'd' response given an auditory/visual/auditory+visual stimulus
+            P_a  = stats.norm.cdf((mu_a - c_a)/sigma_a)
+            P_v  = stats.norm.cdf((mu_v - c_v)/sigma_v)
+            P_av = np.zeros((5,5))
+            
+            for i in range(5):
+                for j in range(5):
+                    P_av[i,j] = (P_a[j]*P_v[i])/(P_a[j]*P_v[i] + (1-P_a[j])*(1-P_v[i]))
+
+            # Define the Negative Log Likelihood for the Binomial Distribution
+            nll_combi_list = []
+            for i in range(5):
+                for j in range(5): 
+                    nll_combi_list.append(np.log(stats.binom.pmf(self.x_av.iloc[i,j], self.n_responses, P_av[i,j])))
+            #for i in range(0, 5):
+            #   for j in range(0, 5):
+            #      l_av.append(binom_likelihood_av((parameters[i + 5], parameters[j]), data[i+2][j]))
+            nll = -sum(np.log(stats.binom.pmf(self.x_a, self.n_responses, P_a))) - \
+                sum(np.log(stats.binom.pmf(self.x_v, self.n_responses, P_v))) - \
+                sum(nll_combi_list)
+
+            return nll
+
+    def print_parameters(self, model):
+        if model == 'Early':
+            Initial_guess = [1,1,1,1]
+            result = minimize(self.NLL, Initial_guess, model)
+            print('Printing parameters for Early Fusion Model')
+            print('c_a: ', result.x[0])
+            print('c_v: ', result.x[1])
+            print('sigma_a: ', np.exp(result.x[2]))
+            print('sigma_v: ', np.exp(result.x[3]))
+        elif model == 'Fuzzy':
+            Initial_guess = np.random.uniform(size=10)
+            result = minimize(self.NLL, Initial_guess, model)
+            print('Printing parameters for Fuzzy Model')
+            print("P_a1:", self.sig(result.x[0]))
+            print("P_a2:", self.sig(result.x[1]))
+            print("P_a3:", self.sig(result.x[2]))
+            print("P_a4:", self.sig(result.x[3]))
+            print("P_a5:", self.sig(result.x[4]))
+            print("P_v1:", self.sig(result.x[5]))
+            print("P_v2:", self.sig(result.x[6]))
+            print("P_v3:", self.sig(result.x[7]))
+            print("P_v4:", self.sig(result.x[8]))
+            print("P_v5:", self.sig(result.x[9]))
+        elif model == 'Late':
+            Initial_guess = [0.5, 0.5, np.std(self.x_a), np.std(self.x_v)]
+            result = minimize(self.NLL, Initial_guess, model)
+            print('Printing parameters for Late Fusion Model')
+            print('c_a: ', result.x[0])
+            print('c_v: ', result.x[1])
+            print('sigma_a: ', result.x[2])
+            print('sigma_v: ', result.x[3])
+
+        print("Negative Loglikelihood Value:", result.fun)
 
 class BCI:
     def __init__(self, n_responses, data):
@@ -516,15 +621,12 @@ class BCI:
             P_av_BCI = c*Pav + (1-c)*np.array(Pa)
 
         elif model == 'Late':
-            c_a, c_v, sigma_a, sigma_v = params
+            c_a, c_v, sigma_a, sigma_v, c = params
+            c = self.sig(c)
             means = np.array([1, 2, 3, 4, 5])
             
             means_atilde = means - c_a
             means_vtilde = means - c_v
-
-            estimates = self.combined_distributions(means_atilde, means_vtilde, sigma_a, sigma_v)
-            audiovisual_means = estimates[0]
-            sigma_av = estimates[1]
 
             Pa = stats.norm.cdf((means - c_a)/sigma_a)
             Pv = stats.norm.cdf((means - c_v)/sigma_v)
@@ -532,7 +634,7 @@ class BCI:
             for i in range(5): # visual
                 for j in range(5): # audio
                     Pav[i,j] = (Pa[j]*Pv[i])/(Pa[j]*Pv[i] + (1-Pa[j])*(1-Pv[i]))  
-            P_av_BCI = Pav
+            P_av_BCI = c*Pav + (1-c)*np.array(Pa)
 
         L = []
         for i in range(5):
@@ -568,13 +670,14 @@ class BCI:
             print("P_v5:", self.sig(result.x[9]))
             print("c:", self.sig(result.x[10]))
         elif model == 'Late':
-            Initial_guess = [0.5, 0.5, np.std(self.x_a), np.std(self.x_v)]
+            Initial_guess = [0.5, 0.5, np.std(self.x_a), np.std(self.x_v), 0.5]
             result = minimize(self.NLL, Initial_guess, model)
             print('Printing parameters for Late Fusion Model')
             print('c_a: ', result.x[0])
             print('c_v: ', result.x[1])
             print('sigma_a: ', result.x[2])
             print('sigma_v: ', result.x[3])
+            print('c: ', self.sig(result.x[4]))
 
         print("Negative Loglikelihood Value:", result.fun)
 
