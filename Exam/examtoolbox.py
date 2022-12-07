@@ -102,11 +102,15 @@ class Variance_Model_2:
         self.mid_c = cs[1]
         self.high_c = cs[2]
 
-    def simulate(self):
+    def simulate(self, return_tp_fp=False):
         sigma_list = []
         mu_list = []
         x_es = []
         y_es = []
+        tps = []
+        fps = []
+        tns = []
+        fns = []
         for i in range(self.n_exp):
             stim_choices = np.random.normal(1, 0.8,50)
             no_stim_choices = np.random.normal(0, 1 ,50)
@@ -126,10 +130,17 @@ class Variance_Model_2:
             tp_c2 = (yes_high_s + yes_low_s) /self.n_trials
             tp_c3 = (yes_high_s + yes_low_s + no_low_s) /self.n_trials
 
+            tn_c1 = (no_high_s + no_low_s + yes_low_s) /self.n_trials
+            tn_c2 = (no_high_s + no_low_s) /self.n_trials
+            tn_c3 = (no_high_s) /self.n_trials
 
             fp_c1 = yes_high_s0 /self.n_trials
             fp_c2 = (yes_high_s0 + yes_low_s0) /self.n_trials
             fp_c3 = (yes_high_s0 + yes_low_s0 + no_low_s0) /self.n_trials
+
+            fn_c1 = (no_high_s0 + no_low_s0 + yes_low_s0) /self.n_trials
+            fn_c2 = (no_high_s0 + no_low_s0) /self.n_trials
+            fn_c3 = (no_high_s0) /self.n_trials
 
             y= np.array([norm.ppf(tp_c1), norm.ppf(tp_c2), norm.ppf(tp_c3)])
             x= np.array([norm.ppf(fp_c1), norm.ppf(fp_c2), norm.ppf(fp_c3)]).reshape((-1,1))
@@ -137,6 +148,11 @@ class Variance_Model_2:
             x_es.append(x)
             y_es.append(y)
             
+            tps.append(np.array([tp_c1, tp_c2, tp_c3]))
+            fps.append(np.array([fp_c1, fp_c2, fp_c3]))
+            tns.append(np.array([tn_c1, tn_c2, tn_c3]))
+            fns.append(np.array([fn_c1, fn_c2, fn_c3]))
+
             model = LinearRegression().fit(x, y)
             intercept, slope = model.intercept_, model.coef_[0]
 
@@ -145,6 +161,14 @@ class Variance_Model_2:
 
             sigma_list.append(sigma)
             mu_list.append(mu_ses)
+
+        if return_tp_fp:
+            tps = [sum(sub_list) / len(sub_list) for sub_list in zip(*tps)]
+            fps = [sum(sub_list) / len(sub_list) for sub_list in zip(*fps)]
+            tns = [sum(sub_list) / len(sub_list) for sub_list in zip(*tns)]
+            fns = [sum(sub_list) / len(sub_list) for sub_list in zip(*fns)]
+            return tps, fps, tns, fns
+
         return mu_list, sigma_list
 
     def plot_histogram(self):
@@ -710,6 +734,20 @@ class BCI:
         print("Negative Loglikelihood Value:", result.fun)
 
 class ROC:
+    '''
+    Roc class for calculating d_prime and plotting ROC curve
+
+    input:
+    TP: True Positive
+    FP: False Positive
+    TN: True Negative
+    FN: False Negative
+
+    parameters:
+    d_prime: outputs the d_prime value
+    roc_curve: plots the ROC curve with numbers of data points and ratings for the base and new stimuli images
+    plot_roc_curve: plots the ROC curve from the given TP, FP, TN, FN values
+    '''
     def __init__(self, TP, FP, TN, FN):
         self.TP = TP
         self.FP = FP
@@ -721,19 +759,19 @@ class ROC:
     def d_prime(self, n_trials):
         print("d_prime for this model is: ", norm.ppf(self.TP/n_trials)-norm.ppf(self.FP/n_trials))
 
-    def roc_curve(self, n_trials, n_datapoints):
+    def roc_curve(self, n_trials, n_datapoints, img_base_ratings, img_new_ratings):
         fpr = []
         tpr = []
         thresholds = np.linspace(0, n_trials, n_datapoints)
         for threshold in thresholds:
 
             #Stimuli
-            yes_s = sum([1 if i >= threshold else 0 for i in self.TP]) #tp 
-            no_s = sum([1 if i < threshold else 0 for i in self.FN]) #fn
+            yes_s = sum([1 if i >= threshold else 0 for i in img_new_ratings]) #tp 
+            no_s = sum([1 if i < threshold else 0 for i in img_new_ratings]) #fn
 
             #No stimul
-            yes_s0 = sum([1 if i >= threshold else 0 for i in self.FP]) #fp
-            no_s0 = sum([1 if i < threshold else 0 for i in self.TN]) #tn
+            yes_s0 = sum([1 if i >= threshold else 0 for i in img_base_ratings]) #fp
+            no_s0 = sum([1 if i < threshold else 0 for i in img_base_ratings]) #tn
 
             tp = yes_s
             fn = no_s
@@ -756,7 +794,7 @@ class ROC:
         if inverse == True:
             TPR = norm.ppf(self.TPR)
             FPR = norm.ppf(self.FPR)
-        plt.plot(FPR, TPR)
+        plt.plot(FPR , TPR)
         plt.scatter(FPR, TPR)
         plt.xlabel('False Positive Rate')
         plt.ylabel('True Positive Rate')
