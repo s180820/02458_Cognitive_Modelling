@@ -497,7 +497,7 @@ class MLE:
         elif model == 'Fuzzy':
             l_av = []
             l_a = np.prod([self.binom_likelihood_a_v(params[j], np.array(self.data)[0][j]) for j in range(0, 5)])
-            l_v = np.prod([self.binom_likelihood_a_v(params[j+5], np.array(self.data[1][j])) for j in range(0, 5)])
+            l_v = np.prod([self.binom_likelihood_a_v(params[j+5], np.array(self.data)[1][j]) for j in range(0, 5)])
 
             for i in range(0, 5):
                 for j in range(0, 5):
@@ -569,12 +569,30 @@ class MLE:
         print("Negative Loglikelihood Value:", result.fun)
 
 class BCI:
-    def __init__(self, n_responses, data):
+    '''
+    BCI Class for parameter estimation and nll calculation
+
+    input:
+    n_responses: number of responses
+    data: dataframe of the data
+    experiment: 'audio' or 'visual': If audio then the experiment subject has to react on what they hear
+    and if visual then the subject has to react on what they see. Will be relevant for the NLL calculation
+    as it changes how to calculate the response probability of the audiovisual condition.
+
+    parameters:
+    sig(x): sigmoid function
+    combined_distributions(means_atilde, means_vtilde, sigma_a_ini, sigma_v_ini): function to calculate 
+    the combined distributions. Used by the NLL function
+    NLL(params, model): Negative Log Likelihood function. Used for minimization
+    print_parameters(model): prints the parameters of the model with the initialised data
+    '''
+    def __init__(self, n_responses, data, experiment='audio'):
         self.n_responses = n_responses
         self.data = data
         self.x_a = data.iloc[0,:]
         self.x_v = data.iloc[1,:]
         self.x_av = data.iloc[2:,:]
+        self.experiment = experiment
         
     def sig(self, x):
         return 1/(1 + np.exp(-x))
@@ -605,7 +623,10 @@ class BCI:
             Pa = stats.norm.cdf((means - c_a)/sigma_a)
             Pv = stats.norm.cdf((means - c_v)/sigma_v)
             Pav = stats.norm.cdf((audiovisual_means)/sigma_av)
-            P_av_BCI = c*Pav + (1-c)*np.array(Pa)
+            if self.experiment == 'audio':
+                P_av_BCI = c*Pav + (1-c)*np.array(Pa)
+            elif self.experiment == 'visual':
+                P_av_BCI = c*Pav + (1-c)*np.array(Pv)
         
         elif model == 'Strong Fusion':
             P_a1, P_a2, P_a3, P_a4, P_a5, P_v1, P_v2, P_v3, P_v4, P_v5, c = params
@@ -618,7 +639,11 @@ class BCI:
             for i in range(5): # visual
                 for j in range(5): # audio
                     Pav[i,j] = (Pa[j]*Pv[i])/(Pa[j]*Pv[i] + (1-Pa[j])*(1-Pv[i]))
-            P_av_BCI = c*Pav + (1-c)*np.array(Pa)
+            if self.experiment == 'audio':
+                P_av_BCI = c*Pav + (1-c)*np.array(Pa)
+            elif self.experiment == 'visual':
+                P_av_BCI = c*Pav + (1-c)*np.array(Pv)
+
 
         elif model == 'Late':
             c_a, c_v, sigma_a, sigma_v, c = params
@@ -634,7 +659,10 @@ class BCI:
             for i in range(5): # visual
                 for j in range(5): # audio
                     Pav[i,j] = (Pa[j]*Pv[i])/(Pa[j]*Pv[i] + (1-Pa[j])*(1-Pv[i]))  
-            P_av_BCI = c*Pav + (1-c)*np.array(Pa)
+            if self.experiment == 'audio':
+                P_av_BCI = c*Pav + (1-c)*np.array(Pa)
+            elif self.experiment == 'visual':
+                P_av_BCI = c*Pav + (1-c)*np.array(Pv)
 
         L = []
         for i in range(5):
