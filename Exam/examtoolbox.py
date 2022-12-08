@@ -94,13 +94,15 @@ class Variance_Model_2:
         simulate(self): simulates the model for the given criterions and outputs a list of mus and sigmas
         plot_histogram(self): plots the histogram of mus and sigmas from the simulate function
     """
-    def __init__(self, n_experiments, n_trials, n_participants, cs):
+    def __init__(self, n_experiments, n_trials, n_participants, sigma_s, sigma_s0, cs):
         self.n_exp = n_experiments
         self.n_trials = n_trials
         self.n_subjects = n_participants
         self.low_c = cs[0]
         self.mid_c = cs[1]
         self.high_c = cs[2]
+        self.sigma_s = sigma_s
+        self.sigma_s0 = sigma_s0
 
     def simulate(self, return_tp_fp=False):
         sigma_list = []
@@ -112,8 +114,8 @@ class Variance_Model_2:
         tns = []
         fns = []
         for i in range(self.n_exp):
-            stim_choices = np.random.normal(1, 0.8,50)
-            no_stim_choices = np.random.normal(0, 1 ,50)
+            stim_choices = np.random.normal(1, self.sigma_s,self.n_trials)
+            no_stim_choices = np.random.normal(0, self.sigma_s0 ,self.n_trials)
 
             yes_high_s =    sum([1 if i >= self.high_c else 0 for i in stim_choices])
             yes_low_s =     sum([1 if i < self.high_c and i > self.mid_c else 0 for i in stim_choices])
